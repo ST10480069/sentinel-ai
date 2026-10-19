@@ -1,0 +1,393 @@
+"use strict";
+/* Sentinel AI – Stage 1 prototype (front-end only).
+   All data is simulated and kept in your browser (localStorage). */
+
+const KEY = "sentinel-proto-v2"; // bumped so old saved sample data (old locations) is replaced
+const OPEN_STATUSES = ["Unresolved", "Confirmed", "Escalated"];
+
+let state = loadState();
+let map = null;
+
+/* ---------- helpers ---------- */
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmt = (iso) => new Date(iso).toLocaleString("en-ZA", { dateStyle: "medium", timeStyle: "medium" });
+const cam = (id) => state.cameras.find((c) => c.id === id);
+const pct = (n) => Math.round(n * 100) + "%";
+
+function loadState() {
+  try {
+    const saved = localStorage.getItem(KEY);
+    if (saved) return JSON.parse(saved);
+  } catch (e) { /* ignore */ }
+  return SENTINEL_DATA();
+}
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* storage full or blocked */ }
+}
+function log(type, msg, ref) {
+  state.log.unshift({ time: new Date().toISOString(), type, msg, ref: ref || "" });
+  save();
+}
+function evidenceSvg(category) {
+  const icons = { "Smoke": "💨", "Fire": "🔥", "Person fall": "🧍", "Restricted area entry": "🚧" };
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180"><rect width="320" height="180" fill="#16233f"/><text x="160" y="95" font-size="48" text-anchor="middle">${icons[category] || "⚠️"}</text><text x="160" y="140" fill="#ffffff" font-size="13" font-family="Arial" text-anchor="middle">SAMPLE IMAGE – SIMULATED</text></svg>`;
+  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+}
+function statusBadge(s) {
+  const cls = { Unresolved: "red", Escalated: "red", Confirmed: "amber", Resolved: "green", Dismissed: "grey" }[s] || "";
+  return `<span class="badge ${cls}">${esc(s)}</span>`;
+}
+function srcBadge(s) {
+  const map = { online: ["green", "Online (simulated)"], degraded: ["amber", "Unstable (simulated)"], offline: ["red", "Offline"] };
+  const [c, t] = map[s] || ["grey", s];
+  return `<span class="dot ${c}"></span>${t}`;
+}
+function readImage(file) {           // shrinks the picture so it is small enough to store
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onerror = reject;
+    fr.onload = () => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        const scale = Math.min(1, 480 / img.width);
+        const c = document.createElement("canvas");
+        c.width = Math.round(img.width * scale);
+        c.height = Math.round(img.height * scale);
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        resolve(c.toDataURL("image/jpeg", 0.7));
+      };
+      img.src = fr.result;
+    };
+    fr.readAsDataURL(file);
+  });
+}
+
+/* ---------- incidents + notifications ---------- */
+function createIncident({ category, cameraId, confidence, source, notes, evidence }) {
+  // duplicate alert reduction: same category + source within 5 minutes
+  const dup = state.incidents.find((i) => i.category === category && i.cameraId === cameraId &&
+    i.status !== "Dismissed" && Date.now() - new Date(i.time).getTime() < 5 * 60000);
+  if (dup) {
+    log("Duplicate", `Duplicate ${category} alert on ${cameraId} suppressed (matches ${dup.id})`, dup.id);
+    return { duplicate: dup };
+  }
+  const id = "INC-DEMO-" + String(state.counter++).padStart(4, "0");
+  const inc = { id, category, cameraId, time: new Date().toISOString(), confidence, status: "Unresolved", source, notes: notes || "", evidence: evidence || null };
+  state.incidents.unshift(inc);
+  log("Detection", `${category} reported on ${cameraId} (${source}, confidence ${pct(confidence)})`, id);
+  notify(inc);
+  save();
+  return { incident: inc };
+}
+
+function notify(inc) {
+  const targets = state.responders.filter((r) => r.enabled);
+  if (!targets.length) { log("System", "No responders enabled – nobody was notified", inc.id); return; }
+  targets.forEach((r) => {
+    const n = { id: "N" + Date.now() + Math.floor(Math.random() * 1000), incidentId: inc.id, to: r.name, channel: "Email (simulated)", status: "Queued", attempts: 1, time: new Date().toISOString() };
+    state.notifications.unshift(n);
+    deliver(n);
+  });
+}
+function deliver(n) {
+  setTimeout(() => {
+    const failed = Math.random() < 0.2;               // simulated 20% failure so retries can be tested
+    n.status = failed ? "Failed" : "Delivered (simulated)";
+    log("Notification", `${n.channel} to ${n.to}: ${n.status} (attempt ${n.attempts})`, n.incidentId);
+    save();
+    if (currentRoute() === "alerts") render();
+  }, 1200);
+}
+
+function setStatus(id, status) {
+  const inc = state.incidents.find((i) => i.id === id);
+  if (!inc) return;
+  inc.status = status;
+  log("Review", `Operator set status to ${status}`, id);
+  save();
+}
+
+/* ---------- pages ---------- */
+function pageOverview() {
+  const total = state.cameras.length;
+  const active = state.cameras.filter((c) => c.status === "online").length;
+  const open = state.incidents.filter((i) => OPEN_STATUSES.includes(i.status)).length;
+  const notMonitored = state.cameras.filter((c) => c.status !== "online");
+  const latest = state.incidents.slice(0, 3).map(incidentCard).join("");
+  return `
+  <h1>Overview</h1><p class="sub">Sample data only – clearly labelled as simulated.</p>
+  ${notMonitored.length ? `<div class="notice red"><strong>⚠ Warning:</strong> ${notMonitored.length} source(s) cannot be monitored right now: ${notMonitored.map((c) => esc(c.name)).join(", ")}.</div>` : ""}
+  <div class="grid stats">
+    <div class="card stat"><div class="muted">Registered sources</div><div class="num">${total}</div></div>
+    <div class="card stat"><div class="muted">Active (simulated)</div><div class="num">${active}</div></div>
+    <div class="card stat"><div class="muted">Incidents detected</div><div class="num">${state.incidents.length}</div></div>
+    <div class="card stat red"><div class="muted">Unresolved incidents</div><div class="num">${open}</div></div>
+  </div>
+  <h2>System health</h2>
+  <div class="card">
+    <table><tbody>
+      <tr><td><span class="dot green"></span>Front-end prototype</td><td>Running</td></tr>
+      <tr><td><span class="dot grey"></span>Backend API (FastAPI)</td><td>Not connected yet – built in Stage 2</td></tr>
+      <tr><td><span class="dot grey"></span>Database (PostgreSQL)</td><td>Not connected yet – built in Stage 3</td></tr>
+      <tr><td><span class="dot grey"></span>AI detection service</td><td>Not connected – detections are simulated</td></tr>
+      <tr><td><span class="dot amber"></span>Notifications</td><td>Simulated only – no real emails are sent</td></tr>
+    </tbody></table>
+    <p><strong>Overall:</strong> <span class="badge amber">Prototype – real monitoring is NOT active</span></p>
+  </div>
+  <h2>Latest incidents</h2><div class="grid">${latest}</div>`;
+}
+
+function incidentCard(i) {
+  const c = cam(i.cameraId);
+  return `<article class="card inc ${i.status === "Unresolved" ? "crit" : ""}">
+    <img src="${esc(i.evidence || evidenceSvg(i.category))}" alt="Sample evidence image: ${esc(i.category)}">
+    <div>
+      <h3>${esc(i.category)} ${statusBadge(i.status)}</h3>
+      <p class="muted">${esc(i.id)} · ${fmt(i.time)}</p>
+      <p>${esc(c ? c.name : i.cameraId)} · Confidence ${pct(i.confidence)} · ${esc(i.source)}</p>
+      <p class="tiny muted">Location shown is the registered camera location, not a verified incident location.</p>
+      <button class="btn small" data-act="view" data-id="${esc(i.id)}">Review</button>
+    </div></article>`;
+}
+
+function pageLive() {
+  const tiles = state.cameras.map((c) => {
+    let feed;
+    if (c.status === "online") feed = `<div class="feed"><div class="scan"></div><span class="tag">SIMULATED FEED</span><span class="clock" data-clock></span>${esc(c.name)}</div>`;
+    else if (c.status === "degraded") feed = `<div class="feed warn">⚠ Unstable connection<br>Attempting automatic reconnection (simulated)</div>`;
+    else feed = `<div class="feed off">⛔ FEED OFFLINE<br>This location is NOT being monitored</div>`;
+    return `<div class="card"><h3>${esc(c.name)}</h3><p class="muted tiny">${esc(c.id)} · ${esc(c.zone)} · ${esc(c.kind)}</p>${feed}<p>${srcBadge(c.status)}</p></div>`;
+  }).join("");
+  return `<h1>Live Monitoring</h1>
+  <p class="sub">These tiles are animated placeholders. Real camera feeds are added in a later stage. Change a source's status in Settings to test the offline warnings.</p>
+  <div class="grid cols">${tiles}</div>`;
+}
+
+function pageDetect() {
+  const camOpts = state.cameras.map((c) => `<option value="${esc(c.id)}">${esc(c.name)} (${esc(c.id)})</option>`).join("");
+  const catOpts = state.categories.map((c) => `<option>${esc(c)}</option>`).join("");
+  return `<h1>Incident Detection</h1>
+  <p class="sub">Test the detection workflow. <strong>No real AI is used yet</strong> – you choose the "simulated confidence" yourself, and the system applies the threshold from Settings.</p>
+  <form id="detectForm" class="card">
+    <label for="dCam">Source</label><select id="dCam">${camOpts}</select>
+    <label for="dCat">Event category to test</label><select id="dCat">${catOpts}</select>
+    <label for="dConf">Simulated confidence: <strong id="dConfVal">85%</strong></label>
+    <input id="dConf" type="range" min="30" max="100" value="85">
+    <label for="testImage">Test image (optional – used as evidence)</label>
+    <input id="testImage" type="file" accept="image/*">
+    <img id="preview" alt="" style="display:none;margin-top:12px;max-width:100%;border-radius:10px">
+    <div class="row" style="margin-top:16px"><button class="btn red" type="submit">Run simulated detection</button></div>
+    <div id="detectResult" aria-live="polite"></div>
+  </form>`;
+}
+
+function pageIncidents() {
+  const camOpts = state.cameras.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
+  const catOpts = state.categories.map((c) => `<option>${esc(c)}</option>`).join("");
+  const cards = state.incidents.map(incidentCard).join("") || `<div class="empty">No incidents yet.</div>`;
+  return `<h1>Incident Reports</h1><p class="sub">History of all incidents. Opening a report is recorded in the Activity Log.</p>
+  <div class="row"><label for="fStatus" style="margin:0">Filter:</label>
+    <select id="fStatus" style="max-width:220px"><option value="">All statuses</option><option>Unresolved</option><option>Confirmed</option><option>Escalated</option><option>Resolved</option><option>Dismissed</option></select></div>
+  <div class="grid" id="incList" style="margin-top:14px">${cards}</div>
+  <h2>Create an incident manually</h2>
+  <form id="newForm" class="card">
+    <label for="nCam">Source</label><select id="nCam">${camOpts}</select>
+    <label for="nCat">Category</label><select id="nCat">${catOpts}</select>
+    <label for="nNotes">Notes (what was observed?)</label><textarea id="nNotes" rows="3" maxlength="500"></textarea>
+    <p class="tiny muted">Location is taken from the registered camera/sensor. It is not a verified incident location.</p>
+    <button class="btn red" type="submit">Create incident</button>
+    <div id="newResult" aria-live="polite"></div>
+  </form>`;
+}
+
+function pageMap() {
+  return `<h1>Map</h1>
+  <p class="sub">Markers show <strong>registered demonstration locations</strong> – not real cameras. A red marker means that source has an open incident, but the exact incident position is <strong>not verified</strong>.</p>
+  <div id="map"></div>
+  <p class="tiny muted">🔵 Online/other &nbsp; 🔴 Open incident &nbsp; ⚫ Offline. Map tiles © OpenStreetMap contributors (needs internet).</p>`;
+}
+
+function pageAlerts() {
+  const fresh = state.incidents.filter((i) => i.status === "Unresolved");
+  const notifRows = state.notifications.slice(0, 15).map((n) => `<tr>
+      <td>${fmt(n.time)}</td><td>${esc(n.incidentId)}</td><td>${esc(n.to)}</td><td>${esc(n.channel)}</td>
+      <td>${esc(n.status)} <span class="tiny muted">(attempts: ${n.attempts})</span></td>
+      <td>${n.status === "Failed" ? `<button class="btn small" data-act="retry" data-id="${esc(n.id)}">Retry</button>` : ""}</td></tr>`).join("");
+  return `<h1>Alerts</h1><p class="sub">New incidents waiting for a human decision. Notifications below are <strong>simulated</strong> – no real emails are sent.</p>
+  <div class="grid">${fresh.map(incidentCard).join("") || `<div class="card empty">No new alerts. 🎉</div>`}</div>
+  <h2>Notification delivery (simulated)</h2>
+  <div class="card table-wrap"><table><thead><tr><th>Time</th><th>Incident</th><th>Responder</th><th>Channel</th><th>Status</th><th></th></tr></thead>
+  <tbody>${notifRows || `<tr><td colspan="6" class="empty">No notifications yet. Create an incident to see one.</td></tr>`}</tbody></table></div>
+  <h2>Responders</h2>
+  <div class="card">${state.responders.map((r) => `<label style="margin:6px 0"><input type="checkbox" data-resp="${esc(r.id)}" ${r.enabled ? "checked" : ""}>${esc(r.name)} <span class="muted tiny">(${esc(r.email)})</span></label>`).join("")}</div>`;
+}
+
+function pageLog() {
+  const rows = state.log.slice(0, 200).map((l) => `<tr><td>${fmt(l.time)}</td><td><span class="badge">${esc(l.type)}</span></td><td>${esc(l.msg)}</td><td>${esc(l.ref)}</td></tr>`).join("");
+  return `<h1>Activity Log</h1><p class="sub">Timestamped record of detections, reviews, access, notifications and system events.</p>
+  <div class="card table-wrap"><table><thead><tr><th>Time</th><th>Type</th><th>Details</th><th>Reference</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function pageSettings() {
+  const thr = state.categories.map((c) => `<label for="t-${esc(c)}">${esc(c)} – alert threshold: <strong>${pct(state.thresholds[c])}</strong></label>
+    <input id="t-${esc(c)}" type="range" min="30" max="99" value="${Math.round(state.thresholds[c] * 100)}" data-thr="${esc(c)}">`).join("");
+  const cams = state.cameras.map((c) => `<tr><td>${esc(c.name)}<br><span class="tiny muted">${esc(c.id)} · ${c.lat}, ${c.lng}</span></td>
+    <td><select data-camstatus="${esc(c.id)}"><option value="online" ${c.status === "online" ? "selected" : ""}>Online</option><option value="degraded" ${c.status === "degraded" ? "selected" : ""}>Unstable</option><option value="offline" ${c.status === "offline" ? "selected" : ""}>Offline</option></select></td></tr>`).join("");
+  const users = state.users.map((u) => `<tr><td>${esc(u.name)}</td><td><span class="badge">${esc(u.role)}</span></td><td class="muted">${esc(u.note)}</td></tr>`).join("");
+  return `<h1>Settings</h1><p class="sub">Prototype settings are saved only in this browser.</p>
+  <div class="grid cols">
+    <div class="card"><h3>Alert thresholds</h3><p class="tiny muted">A detection below its threshold will NOT create an incident.</p>${thr}</div>
+    <div class="card"><h3>Sources (simulated status)</h3><p class="tiny muted">Change a status to test offline warnings.</p><table><tbody>${cams}</tbody></table></div>
+  </div>
+  <h2>Users and roles (demonstration)</h2>
+  <div class="card table-wrap"><table><tbody>${users}</tbody></table><p class="tiny muted">Real secure login and role-based access arrive in a later stage.</p></div>
+  <h2>Reset</h2><div class="card"><button class="btn ghost" data-act="reset">Reset all sample data</button></div>`;
+}
+
+/* ---------- map ---------- */
+function initMap() {
+  const el = $("#map");
+  if (!el) return;
+  if (typeof L === "undefined") { el.innerHTML = `<div class="empty">The map library could not load. Check your internet connection and refresh.</div>`; return; }
+  // Map is limited to South Africa (plus Lesotho/Eswatini that sit inside it)
+  const SA_BOUNDS = L.latLngBounds([-35.2, 16.2], [-21.9, 33.1]);
+  map = L.map("map", { maxBounds: SA_BOUNDS.pad(0.15), maxBoundsViscosity: 1.0, minZoom: 5 });
+  map.fitBounds(SA_BOUNDS);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap contributors", maxZoom: 18, bounds: SA_BOUNDS.pad(0.15) }).addTo(map);
+  state.cameras.forEach((c) => {
+    const open = state.incidents.filter((i) => i.cameraId === c.id && OPEN_STATUSES.includes(i.status));
+    const color = open.length ? "#e5253a" : c.status === "offline" ? "#777777" : "#3b82f6";
+    const popup = `<strong>${esc(c.name)}</strong><br>${esc(c.id)} · ${esc(c.kind)}<br>Registered DEMO location<br>Status: ${esc(c.status)}<br>` +
+      (open.length ? `<b>${open.length} open incident(s)</b><br><em>Incident position not verified – shown at registered location.</em>` : "No open incidents");
+    L.circleMarker([c.lat, c.lng], { radius: open.length ? 13 : 9, color: "#fff", weight: 2, fillColor: color, fillOpacity: 0.95 }).addTo(map).bindPopup(popup);
+  });
+}
+
+/* ---------- incident dialog ---------- */
+function openIncident(id) {
+  const i = state.incidents.find((x) => x.id === id);
+  if (!i) return;
+  const c = cam(i.cameraId);
+  log("Access", `Operator opened incident report (sensitive data viewed)`, id);
+  $("#dlg").innerHTML = `
+    <h2 style="margin-top:0">${esc(i.category)} ${statusBadge(i.status)}</h2>
+    <img src="${esc(i.evidence || evidenceSvg(i.category))}" alt="Evidence image (sample)">
+    <table><tbody>
+      <tr><th>Incident ID</th><td>${esc(i.id)}</td></tr>
+      <tr><th>Date / time</th><td>${fmt(i.time)}</td></tr>
+      <tr><th>Source</th><td>${esc(c ? c.name : i.cameraId)} (${esc(i.cameraId)})</td></tr>
+      <tr><th>Registered location</th><td>${c ? c.lat + ", " + c.lng : "unknown"} <span class="tiny muted">(registered location – not a verified incident location)</span></td></tr>
+      <tr><th>Confidence</th><td>${pct(i.confidence)} (${esc(i.source)})</td></tr>
+      <tr><th>Notes</th><td>${esc(i.notes) || "—"}</td></tr>
+    </tbody></table>
+    <p class="tiny muted">An AI detection is only a possibility. A human must review it; nobody is identified or accused based on it.</p>
+    <div class="row">
+      <button class="btn small" data-act="status" data-val="Confirmed" data-id="${esc(i.id)}">Confirm</button>
+      <button class="btn small ghost" data-act="status" data-val="Dismissed" data-id="${esc(i.id)}">Dismiss</button>
+      <button class="btn small red" data-act="status" data-val="Escalated" data-id="${esc(i.id)}">Escalate</button>
+      <button class="btn small ghost" data-act="status" data-val="Resolved" data-id="${esc(i.id)}">Mark resolved</button>
+      <button class="btn small ghost" data-act="close">Close</button>
+    </div>`;
+  $("#dlg").showModal();
+}
+
+/* ---------- router ---------- */
+const routes = { overview: pageOverview, live: pageLive, detect: pageDetect, incidents: pageIncidents, map: pageMap, alerts: pageAlerts, log: pageLog, settings: pageSettings };
+const currentRoute = () => (location.hash.slice(1) in routes ? location.hash.slice(1) : "overview");
+
+function render() {
+  if (map) { map.remove(); map = null; }
+  const r = currentRoute();
+  $("#view").innerHTML = routes[r]();
+  document.querySelectorAll("nav a").forEach((a) => a.classList.toggle("active", a.dataset.route === r));
+  $("#nav").classList.remove("open");
+  if (r === "map") initMap();
+  tick();
+}
+function tick() {
+  document.querySelectorAll("[data-clock]").forEach((el) => { el.textContent = new Date().toLocaleTimeString("en-ZA"); });
+}
+setInterval(tick, 1000);
+window.addEventListener("hashchange", render);
+
+/* ---------- events ---------- */
+document.addEventListener("click", (e) => {
+  if (e.target.id === "menuBtn") { $("#nav").classList.toggle("open"); return; }
+  const b = e.target.closest("[data-act]");
+  if (!b) return;
+  const act = b.dataset.act;
+  if (act === "view") openIncident(b.dataset.id);
+  else if (act === "close") $("#dlg").close();
+  else if (act === "status") { setStatus(b.dataset.id, b.dataset.val); $("#dlg").close(); render(); }
+  else if (act === "retry") {
+    const n = state.notifications.find((x) => x.id === b.dataset.id);
+    if (n) { n.attempts++; n.status = "Queued"; save(); deliver(n); render(); }
+  } else if (act === "reset") {
+    if (confirm("Reset all sample data and remove anything you created?")) { state = SENTINEL_DATA(); save(); render(); }
+  }
+});
+$("#nav").addEventListener("click", (e) => { if (e.target.tagName === "A") $("#nav").classList.remove("open"); });
+
+document.addEventListener("input", (e) => {
+  if (e.target.id === "dConf") $("#dConfVal").textContent = e.target.value + "%";
+  if (e.target.dataset.thr) {
+    state.thresholds[e.target.dataset.thr] = Number(e.target.value) / 100;
+    e.target.previousElementSibling.querySelector("strong").textContent = e.target.value + "%";
+    save();
+  }
+});
+
+document.addEventListener("change", async (e) => {
+  const t = e.target;
+  if (t.id === "fStatus") {
+    const list = state.incidents.filter((i) => !t.value || i.status === t.value);
+    $("#incList").innerHTML = list.map(incidentCard).join("") || `<div class="empty">No incidents match.</div>`;
+  } else if (t.id === "testImage" && t.files[0]) {
+    try { const p = $("#preview"); p.src = await readImage(t.files[0]); p.style.display = "block"; }
+    catch (err) { alert("Could not read that image."); }
+  } else if (t.dataset.camstatus) {
+    const c = cam(t.dataset.camstatus);
+    c.status = t.value;
+    log("System", t.value === "online" ? `${c.name} reconnected (simulated)` : `${c.name} status changed to ${t.value} (simulated) – location not fully monitored`, c.id);
+  } else if (t.dataset.resp) {
+    const r = state.responders.find((x) => x.id === t.dataset.resp);
+    r.enabled = t.checked; log("Settings", `${r.name} notifications ${r.enabled ? "enabled" : "disabled"}`, r.id);
+  }
+});
+
+document.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (e.target.id === "detectForm") {
+    const cameraId = $("#dCam").value, category = $("#dCat").value;
+    const confidence = Number($("#dConf").value) / 100;
+    const threshold = state.thresholds[category];
+    const c = cam(cameraId);
+    const out = $("#detectResult");
+    if (c.status !== "online") {
+      out.innerHTML = `<div class="notice red">⛔ ${esc(c.name)} is ${esc(c.status)}. A detection cannot be accepted from a source that is not connected.</div>`;
+      log("System", `Detection rejected – ${c.name} is ${c.status}`, c.id);
+      return;
+    }
+    if (confidence < threshold) {
+      out.innerHTML = `<div class="notice">Confidence ${pct(confidence)} is below the ${pct(threshold)} threshold for "${esc(category)}". <strong>No incident created.</strong></div>`;
+      log("Detection", `Below-threshold ${category} ignored on ${cameraId} (${pct(confidence)} < ${pct(threshold)})`, cameraId);
+      return;
+    }
+    const file = $("#testImage").files[0];
+    let evidence = null;
+    try { if (file) evidence = await readImage(file); } catch (err) { /* use placeholder */ }
+    const res = createIncident({ category, cameraId, confidence, source: "Simulated detection", notes: "Created by the prototype detection test.", evidence });
+    out.innerHTML = res.duplicate
+      ? `<div class="notice">Duplicate of ${esc(res.duplicate.id)} (same source and category within 5 minutes). Alert suppressed.</div>`
+      : `<div class="notice red">🚨 Incident <strong>${esc(res.incident.id)}</strong> created and simulated notifications queued. See <a href="#alerts" style="color:#fff">Alerts</a>.</div>`;
+  }
+  if (e.target.id === "newForm") {
+    const res = createIncident({ category: $("#nCat").value, cameraId: $("#nCam").value, confidence: 1, source: "Manual report", notes: $("#nNotes").value.trim() });
+    if (res.duplicate) $("#newResult").innerHTML = `<div class="notice">Duplicate of ${esc(res.duplicate.id)} – not created.</div>`;
+    else { render(); }
+  }
+});
+
+render();

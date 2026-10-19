@@ -1,0 +1,41 @@
+// SAMPLE DATA – everything here is made up for the prototype.
+// Coordinates are DEMONSTRATION locations only (they are not real cameras).
+function SENTINEL_DATA() {
+  const ago = (minutes) => new Date(Date.now() - minutes * 60000).toISOString();
+  return {
+    counter: 6,
+    categories: ["Smoke", "Fire", "Person fall", "Restricted area entry"],
+    thresholds: { "Smoke": 0.7, "Fire": 0.8, "Person fall": 0.75, "Restricted area entry": 0.7 },
+    cameras: [
+      { id: "CAM-001", name: "Demo Main Gate",           zone: "Demo Site A", lat: -26.2041, lng: 28.0473, status: "online",   kind: "Camera" },
+      { id: "CAM-002", name: "Demo Warehouse Floor",     zone: "Demo Site A", lat: -26.2055, lng: 28.0501, status: "online",   kind: "Camera" },
+      { id: "CAM-003", name: "Demo Car Park",            zone: "Demo Site B (Cape Town area)", lat: -33.9249, lng: 18.4241, status: "degraded", kind: "Camera" },
+      { id: "CAM-004", name: "Demo Server Room",         zone: "Demo Site B (Cape Town area)", lat: -33.9300, lng: 18.4300, status: "offline",  kind: "Camera" },
+      { id: "SEN-001", name: "Demo Smoke Sensor – Store", zone: "Demo Site C (Durban area)",    lat: -29.8587, lng: 31.0218, status: "online",   kind: "Sensor" }
+    ],
+    incidents: [
+      { id: "INC-DEMO-0001", category: "Smoke",                 cameraId: "CAM-002", time: ago(12),   confidence: 0.91, status: "Unresolved", source: "Simulated detection", notes: "Sample incident for the prototype." },
+      { id: "INC-DEMO-0002", category: "Restricted area entry", cameraId: "CAM-001", time: ago(95),   confidence: 0.78, status: "Confirmed",  source: "Simulated detection", notes: "Sample incident for the prototype." },
+      { id: "INC-DEMO-0003", category: "Person fall",           cameraId: "CAM-002", time: ago(300),  confidence: 0.83, status: "Escalated",  source: "Simulated detection", notes: "Sample incident for the prototype." },
+      { id: "INC-DEMO-0004", category: "Fire",                  cameraId: "SEN-001", time: ago(1500), confidence: 0.95, status: "Resolved",   source: "Simulated detection", notes: "Sample incident for the prototype." },
+      { id: "INC-DEMO-0005", category: "Smoke",                 cameraId: "CAM-003", time: ago(2900), confidence: 0.72, status: "Dismissed",  source: "Simulated detection", notes: "Sample incident for the prototype (false alarm)." }
+    ],
+    responders: [
+      { id: "R1", name: "Demo Responder – Safety Officer",       email: "safety@example.com",  enabled: true },
+      { id: "R2", name: "Demo Responder – Site Manager",         email: "manager@example.com", enabled: true },
+      { id: "R3", name: "Demo Responder – Security Control Room", email: "control@example.com", enabled: false }
+    ],
+    notifications: [],
+    users: [
+      { name: "Demo Administrator", role: "Administrator", note: "Manages users, sources, settings" },
+      { name: "Demo Operator",      role: "Operator",      note: "Reviews, confirms, dismisses, escalates" },
+      { name: "Demo Viewer",        role: "Viewer",        note: "Read-only access" }
+    ],
+    log: [
+      { time: ago(12),   type: "Detection",   msg: "Smoke detected on CAM-002 (simulated, confidence 91%)", ref: "INC-DEMO-0001" },
+      { time: ago(95),   type: "Review",      msg: "Operator confirmed incident (simulated)",                ref: "INC-DEMO-0002" },
+      { time: ago(210),  type: "System",      msg: "CAM-004 connection lost – reconnect attempts failing (simulated)", ref: "CAM-004" },
+      { time: ago(300),  type: "Escalation",  msg: "Operator escalated incident (simulated)",                ref: "INC-DEMO-0003" }
+    ]
+  };
+}

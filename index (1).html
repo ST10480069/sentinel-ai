@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sentinel AI – Prototype</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="demo-banner" role="alert">
+    PROTOTYPE – all cameras, feeds, detections, locations and notifications are <strong>SIMULATED</strong>.
+    Nothing is connected to real cameras and nothing is being monitored.
+  </div>
+
+  <div class="app">
+    <header class="topbar">
+      <button id="menuBtn" class="btn" aria-label="Open menu">☰ Menu</button>
+      <span class="brand">🛡️ Sentinel&nbsp;AI</span>
+    </header>
+
+    <nav id="nav" aria-label="Main navigation">
+      <div class="brand big">🛡️ Sentinel&nbsp;AI</div>
+      <a href="#overview" data-route="overview">📊 Overview</a>
+      <a href="#live" data-route="live">📹 Live Monitoring</a>
+      <a href="#detect" data-route="detect">🔍 Incident Detection</a>
+      <a href="#incidents" data-route="incidents">📋 Incident Reports</a>
+      <a href="#map" data-route="map">🗺️ Map</a>
+      <a href="#alerts" data-route="alerts">🔔 Alerts</a>
+      <a href="#log" data-route="log">🕒 Activity Log</a>
+      <a href="#settings" data-route="settings">⚙️ Settings</a>
+      <p class="tiny nav-foot">Signed in as: Demo Operator (simulated login)</p>
+    </nav>
+
+    <main id="view" tabindex="-1"></main>
+  </div>
+
+  <dialog id="dlg"></dialog>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
